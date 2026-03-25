@@ -175,6 +175,8 @@ function insertReading(sensor, obj) {
             if (err) throw err
             else {
                 // If the results array is empty insert the sensor key into the sensors table.
+                let tzoffset = (new Date()).getTimezoneOffset() * 60000 // In miliseconds
+                let currentTimeStamp = new Date(Date.now() - tzoffset).toISOString().slice(0, -5).replace('T', ' ');
                 if (result.length === 0) {
                     let insertQuery = `INSERT INTO sensors (sensor_key, name, type, unit) 
                                        VALUES ("${sensor.key}", "${sensor.name}", "${sensor.type}", "${obj.unit}")`;
@@ -184,13 +186,13 @@ function insertReading(sensor, obj) {
                             connection.query(sqlQuery, function (err, result) {
                                 if (err) throw err;
                                 else {
-                                    connection.query(`INSERT INTO readings (sensor_id, value, created_at) VALUES ("${result[0].id}", "${obj.temperature}", "${new Date().toISOString().slice(0, -5).replace('T', ' ')}")`);
+                                    connection.query(`INSERT INTO readings (sensor_id, value, created_at) VALUES ("${result[0].id}", "${obj.temperature}", "${currentTimeStamp}")`);
                                 }
                             });
                         }
                     });
                 } else {
-                    connection.query(`INSERT INTO readings (sensor_id, value, created_at) VALUES ("${result[0].id}", "${obj.temperature}", "${new Date().toISOString().slice(0, -5).replace('T', ' ')}")`);
+                    connection.query(`INSERT INTO readings (sensor_id, value, created_at) VALUES ("${result[0].id}", "${obj.temperature}", "${currentTimeStamp}")`);
                 }
             }
         });
@@ -222,7 +224,7 @@ io.on("connection", (socket) => {
                 // console.log(getSensorID(sensorKey));
 
                 // Emit data to the frontend for real-time visualization
-                io.emit("data", temp);
+                io.emit("data", mote, temp);
             } catch (error) {
                 console.log("request error:", error.message || error);
             }
