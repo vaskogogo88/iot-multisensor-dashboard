@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Realtime Temperature</title>
+
+    <style>
+      body {
+        font-family: system-ui, Arial, sans-serif;
+        margin: 24px;
+      }
+
+      .top {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 14px;
+      }
+
+      .pill {
+        border: 1px solid #dddddd;
+        border-radius: 999px;
+        padding: 8px 12px;
+      }
+
+      .muted {
+        color: #666666;
+      }
+
+      .wrap {
+        max-width: 980px;
+      }
+
+      canvas {
+        width: 100% !important;
+        height: 420px !important;
+      }
+    </style>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  </head>
+
+  <body>
+    <div class="wrap">
+      <h1>Real-Time Sensor Data</h1>
+
+      <div class="top">
+        <div class="pill">Status: <span id="status" class="muted">connecting...</span></div>
+        <div class="pill">Latest: <strong><span id="latest">--</span></strong> °C</div>
+        <div class="pill">Points: <span id="points">0</span></div>
+      </div>
+
+      <canvas id="tempChart"></canvas>
+      <select class="sensor-dropdown"></select><br>
+      <button class="load-latest-50">Load Latest 50</button><br>
+      <label for="readings-range">Select starting range:</label>
+      <input type="datetime-local" id="start-readings-range" name="start-readings-range">
+      <label for="end-readings-range">Select ending range:</label>
+      <input type="datetime-local" id="end-readings-range" name="end-readings-range">
+      <button id="search-readings-range">Load search history</button>
+
+    </div>
+
+    <script>
+      (function () {
+        const statusEl = document.getElementById("status");
+        const latestEl = document.getElementById("latest");
+        const pointsEl = document.getElementById("points");
+        const sensorDropdown = document.querySelector(".sensor-dropdown");
+        const loadDataButton = document.querySelector(".load-latest-50");
+        const startReadingsRange = document.querySelector("#start-readings-range");
+        const endReadingsRange = document.querySelector("#end-readings-range");
+        const searchReadingsRangeBtn = document.querySelector("#search-readings-range");
+        
+        let startReadingTime; 
+        let endReadingTime;
+
+        const MAX_POINTS = 60; // keep last N points
+        const labels = [];
+        const data = [];
+
+
+        const getSensors = async () => {
+          const response = await fetch('http://localhost:3000/api/sensors');
+          const sensorsJson = await response.json(); //extract JSON from the http response
+          let sensorKeysArray = [];
+
+          for (const sensorObject of sensorsJson) {
+            sensorKeysArray.push(sensorObject);
+          }
+          return sensorKeysArray;
+        }
+
+
+        getSensors().then(sensorKeysArray => {
+          sensorKeysArray.forEach((element, key) => {
+            sensorDropdown[key] = new Option(element.sensor_key, key);
+          });
+
+          sensorDropdown.options[1].selected = true;
+        });
+
+        const ctx = document.getElementById("tempChart").getContext("2d");
+        const chart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels,
+            datasets: [
+              {
+                label: "Temperature (°C)",
+                data,
+                tension: 0.25,
+                pointRadius: 2
+              }
+            ]
+          },
+          options: {
+            animation: false,
+            responsive: true,
+            scales: {
+              x: {
+                ticks: { maxTicksLimit: 10 }
+              },
+              y: {
+                title: { display: true, text: "°C" }
+              }
+            },
+            plugins: {
+              legend: { display: true },
+              tooltip: { enabled: true }
+            }
+          }
+        });
+
+        const socket = io();
+
+        socket.on("connect", () => {
+          statusEl.textContent = "connected";
+        });
+
+        socket.on("disconnect", () => {
+          statusEl.textContent = "disconnected";
+        });
+
+        socket.on("connect_error", (err) => {
+          statusEl.textContent = "error: " + (err?.message || "connect_error");
+        });
+
+        socket.on("data", (mote, temp) => {
+
+          temp = Number(temp);
+          if (Number.isNaN(temp)) return;
+
+          const now = new Date();
+          const t = now.toLocaleTimeString();
+
+          let selectedSensor = sensorDropdown.options[sensorDropdown.selectedIndex].text;
+          console.log(mote.key);
+          if (mote.key === selectedSensor) {
+            labels.push(t);
+            data.push(temp);
+          
+
+            if (labels.length > MAX_POINTS) {
+              labels.shift();
+              data.shift();
+            }
+
+            latestEl.textContent = temp.toFixed(1);
+            pointsEl.textContent = String(data.length);
+
+            chart.update();
+          }
+        });        
+
+
+        function resetPlot(dataJson) {
+          console.log
+          data.length = 0;
+          labels.length = 0;
+
+          dataJson.forEach((element) => {
+            let createdAt = (new Date(element.created_at)).toLocaleTimeString();
+            data.push(element.value);
+            labels.push(createdAt);
+
+            if (labels.length > MAX_POINTS) {
+              labels.shift();
+              data.shift();
+            }
+
+          });
+
+          latestEl.textContent = data[data.length-1].toFixed(1);
+          pointsEl.textContent = String(data.length);
+
+          chart.update();
+        }
+
+
+        const getLatestData = async (limit) => {
+            let selectedSensor = sensorDropdown.options[sensorDropdown.selectedIndex].text;
+            const response = await fetch(`http://localhost:3000/api/readings/latest?sensor=${selectedSensor}&limit=${limit}`);
+            const dataJson = await response.json();
+            return dataJson;
+        };
+
+        const getDataInRange = async (startReadingTime, endReadingTime) => {
+          let selectedSensor = sensorDropdown.options[sensorDropdown.selectedIndex].text;
+          const response = await fetch(`http://localhost:3000/api/readings/range?sensor=${selectedSensor}&start=${startReadingTime}&end=${endReadingTime}`);
+          const dataJson = await response.json();
+          return dataJson;
+        }
+
+
+        function loadLatestData(limit=50) {
+          getLatestData(limit).then(dataJson => {
+            resetPlot(dataJson);
+          });  
+        }
+
+        function loadDataInRange(startReadingTime, endReadingTime) {
+          getDataInRange(startReadingTime, endReadingTime).then(dataJson => {
+            resetPlot(dataJson);
+          });
+        }
+
+
+        loadDataButton.addEventListener("click", (e) => {
+          loadLatestData();
+        });
+
+        sensorDropdown.addEventListener("change", (e) => {
+          const selectedCategory = e.target.value;
+        });
+
+
+        startReadingsRange.addEventListener("change", (e) => {
+          startReadingTime = e.target.value.replace("T", " ");
+        });
+
+        endReadingsRange.addEventListener("change", (e) => {
+          endReadingTime = e.target.value.replace("T", " ");
+        });
+
+        searchReadingsRangeBtn.addEventListener("click", (e) => {
+          
+          const getTimeDifference = (startTime, endTime) => {
+            return (new Date(endTime).getTime()) - (new Date(startTime).getTime());
+          };
+
+          if (startReadingTime === undefined && endReadingTime === undefined) {
+            alert( "Please specify the starting and ending time ranges" );
+          } else if (startReadingTime === undefined) {
+            alert( "Please specify the starting time range" );
+          } else if (endReadingTime === undefined) {
+            alert( "Please specify the ending time range" );
+          } else if (getTimeDifference(startReadingTime, endReadingTime) < 0){
+            alert( "The ending range cannot be before the starting range." );
+          } else {
+            loadDataInRange(startReadingTime, endReadingTime);
+          }
+        });
+      
+        
+      })();
+    </script>
+  </body>
+</html>
